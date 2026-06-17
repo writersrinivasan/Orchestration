@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import {
   ReactFlow,
   Background,
@@ -64,9 +64,8 @@ function toFlowEdges(wfEdges: WorkflowEdge[]): Edge[] {
   }));
 }
 
-let nodeCounter = 100;
-
 export default function PlaygroundClient() {
+  const nodeCounterRef = useRef(100);
   const [preset, setPreset] = useState(PRESETS[0]);
   const [steps, setSteps] = useState<Map<string, ExecutionStep>>(new Map());
   const [logs, setLogs] = useState<string[]>([]);
@@ -76,6 +75,11 @@ export default function PlaygroundClient() {
   const [totalMs, setTotalMs] = useState(0);
   const [input, setInput] = useState(preset.sampleInput);
   const logRef = useRef<HTMLDivElement>(null);
+  const mountedRef = useRef(true);
+  useEffect(() => { return () => { mountedRef.current = false; }; }, []);
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [logs]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(toFlowNodes(preset.nodes, new Map()));
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(toFlowEdges(preset.edges));
@@ -98,7 +102,7 @@ export default function PlaygroundClient() {
   };
 
   const addNode = (type: string) => {
-    const id = `n${nodeCounter++}`;
+    const id = `n${nodeCounterRef.current++}`;
     const labelMap: Record<string, string> = {
       input: "Input", llm: "LLM Node", tool: "Tool", router: "Router",
       human: "Human Gate", memory: "Memory", output: "Output"
@@ -148,13 +152,8 @@ export default function PlaygroundClient() {
     };
 
     const onLog = (log: string) => {
-      setLogs((prev) => {
-        const next = [...prev, log];
-        setTimeout(() => {
-          if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-        }, 10);
-        return next;
-      });
+      if (!mountedRef.current) return;
+      setLogs((prev) => [...prev, log]);
     };
 
     const wfNodes: WorkflowNode[] = nodes.map((n) => ({

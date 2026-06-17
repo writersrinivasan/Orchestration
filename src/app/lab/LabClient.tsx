@@ -68,9 +68,10 @@ const INSIGHTS = [
 ];
 
 export default function LabClient() {
-  const [results, setResults] = useState<(RunResult | null)[]>([null, null]);
-  const [running, setRunning] = useState<boolean[]>([false, false]);
-  const [logs, setLogs] = useState<string[][]>([[], []]);
+  const count = RESEARCH_PRESETS.length;
+  const [results, setResults] = useState<(RunResult | null)[]>(() => Array(count).fill(null));
+  const [running, setRunning] = useState<boolean[]>(() => Array(count).fill(false));
+  const [logs, setLogs] = useState<string[][]>(() => Array(count).fill(null).map(() => []));
 
   const runBoth = async () => {
     const runPreset = async (idx: number, preset: typeof PRESETS[0]) => {
@@ -80,42 +81,45 @@ export default function LabClient() {
 
       let llmCalls = 0, toolCalls = 0, stepCount = 0;
 
-      const result = await executeWorkflow(
-        preset.nodes as WorkflowNode[],
-        preset.edges as WorkflowEdge[],
-        preset.sampleInput,
-        preset.orchestrationModel,
-        (step) => {
-          if (step.status === "complete") {
-            stepCount++;
-            if (step.nodeType === "llm") llmCalls++;
-            if (step.nodeType === "tool") toolCalls++;
+      try {
+        const result = await executeWorkflow(
+          preset.nodes as WorkflowNode[],
+          preset.edges as WorkflowEdge[],
+          preset.sampleInput,
+          preset.orchestrationModel,
+          (step) => {
+            if (step.status === "complete") {
+              stepCount++;
+              if (step.nodeType === "llm") llmCalls++;
+              if (step.nodeType === "tool") toolCalls++;
+            }
+          },
+          (log) => {
+            setLogs((l) => { const n = [...l]; n[idx] = [...n[idx], log]; return n; });
           }
-        },
-        (log) => {
-          setLogs((l) => { const n = [...l]; n[idx] = [...n[idx], log]; return n; });
-        }
-      );
+        );
 
-      setResults((r) => {
-        const n = [...r];
-        n[idx] = {
-          totalTokens: result.totalTokens,
-          totalCost: result.totalCost,
-          totalLatencyMs: result.totalLatencyMs,
-          llmCalls,
-          toolCalls,
-          stepCount,
-        };
-        return n;
-      });
-      setRunning((r) => { const n = [...r]; n[idx] = false; return n; });
+        setResults((r) => {
+          const n = [...r];
+          n[idx] = {
+            totalTokens: result.totalTokens,
+            totalCost: result.totalCost,
+            totalLatencyMs: result.totalLatencyMs,
+            llmCalls,
+            toolCalls,
+            stepCount,
+          };
+          return n;
+        });
+      } finally {
+        setRunning((r) => { const n = [...r]; n[idx] = false; return n; });
+      }
     };
 
     await Promise.all(RESEARCH_PRESETS.map((p, i) => runPreset(i, p)));
   };
 
-  const bothDone = results[0] !== null && results[1] !== null;
+  const bothDone = results.length >= 2 && results[0] !== null && results[1] !== null;
 
   const maxTokens = Math.max(results[0]?.totalTokens ?? 0, results[1]?.totalTokens ?? 1);
   const maxCost = Math.max(results[0]?.totalCost ?? 0, results[1]?.totalCost ?? 0.001);

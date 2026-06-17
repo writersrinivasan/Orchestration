@@ -54,7 +54,7 @@ export default function SimulatorClient() {
 
   const { nodes: initNodes, edges: initEdges } = presetToFlow(selected, new Map());
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(initNodes);
-  const [edges, , onEdgesChange] = useEdgesState<Edge>(initEdges);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(initEdges);
 
   const selectPreset = (p: WorkflowPreset) => {
     setSelected(p);
@@ -64,8 +64,7 @@ export default function SimulatorClient() {
     setTotalTokens(0); setTotalCost(0); setTotalMs(0);
     const { nodes: n, edges: e } = presetToFlow(p, new Map());
     setNodes(n);
-    // re-init edges by key trick — just reset
-    window.location.hash = "";
+    setEdges(e);
   };
 
   const run = async () => {
@@ -254,7 +253,7 @@ export default function SimulatorClient() {
                       <div className="mt-2 text-[10px] text-slate-500 bg-slate-950 rounded p-1.5 font-mono overflow-hidden max-h-16">
                         {typeof step.output === "string"
                           ? step.output.substring(0, 120) + (step.output.length > 120 ? "..." : "")
-                          : JSON.stringify(step.output).substring(0, 120) + "..."}
+                          : (() => { const s = JSON.stringify(step.output); return s.length > 120 ? s.substring(0, 120) + "..." : s; })()}
                       </div>
                     )}
                   </div>

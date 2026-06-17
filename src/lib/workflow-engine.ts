@@ -116,7 +116,8 @@ const MOCK_TOOL_RESPONSES: Record<string, unknown> = {
 function getMockLLMResponse(nodeLabel: string) {
   const label = nodeLabel.toLowerCase();
   if (label.includes("classif") || label.includes("intent") || label.includes("route")) return MOCK_LLM_RESPONSES.classify;
-  if (label.includes("summar") || label.includes("synth")) return MOCK_LLM_RESPONSES.summarize;
+  if (label.includes("summar")) return MOCK_LLM_RESPONSES.summarize;
+  if (label.includes("synth")) return MOCK_LLM_RESPONSES.synthesize;
   if (label.includes("review") || label.includes("audit")) return MOCK_LLM_RESPONSES.review;
   if (label.includes("support") || label.includes("triage")) return MOCK_LLM_RESPONSES.support;
   if (label.includes("plan")) return MOCK_LLM_RESPONSES.plan;
@@ -170,90 +171,100 @@ export async function executeWorkflow(
 
   log(`Starting ${orchestrationModel} workflow with ${nodes.length} nodes`);
 
-  while (queue.length > 0) {
-    const currentId = queue.shift()!;
-    const node = nodeMap[currentId];
-    if (!node) continue;
+  try {
+    while (queue.length > 0) {
+      const currentId = queue.shift()!;
+      const node = nodeMap[currentId];
+      if (!node) continue;
 
-    const step: ExecutionStep = {
-      nodeId: node.id,
-      nodeLabel: node.label,
-      nodeType: node.type,
-      status: "running",
-      startedAt: Date.now(),
-    };
+      const step: ExecutionStep = {
+        nodeId: node.id,
+        nodeLabel: node.label,
+        nodeType: node.type,
+        status: "running",
+        startedAt: Date.now(),
+      };
 
-    onStepUpdate({ ...step });
-    log(`Executing: ${node.label} (${node.type})`);
+      onStepUpdate({ ...step });
+      log(`Executing: ${node.label} (${node.type})`);
 
-    // Simulate step execution based on type
-    if (node.type === "input") {
-      await sleep(100);
-      step.output = input;
-      step.latencyMs = 100;
-      log(`Input received: "${input.substring(0, 50)}${input.length > 50 ? "..." : ""}"`);
-    } else if (node.type === "llm") {
-      const mock = getMockLLMResponse(node.label);
-      // Simulate realistic latency based on model speed
-      const speedMultiplier = orchestrationModel === "out-of-llm" ? 0.6 : 1.0;
-      await sleep(mock.latencyMs * speedMultiplier);
-      step.tokensIn = mock.tokensIn;
-      step.tokensOut = mock.tokensOut;
-      step.costUsd = (mock.tokensIn * 0.000003) + (mock.tokensOut * 0.000015);
-      step.latencyMs = Math.round(mock.latencyMs * speedMultiplier);
-      step.output = mock.output;
-      step.input = outputs[edges.find((e) => e.target === node.id)?.source ?? "__input"] ?? input;
-      run.totalTokens += (mock.tokensIn + mock.tokensOut);
-      run.totalCost += step.costUsd;
-      log(`LLM call complete: ${mock.tokensIn + mock.tokensOut} tokens, $${step.costUsd.toFixed(4)}`);
-    } else if (node.type === "tool") {
-      const toolName = (node.config?.tool as string) ?? "web_search";
-      await sleep(400 + Math.random() * 300);
-      step.latencyMs = 400 + Math.round(Math.random() * 300);
-      step.output = getMockToolResponse(toolName);
-      step.toolCalls = [{ name: toolName, input: { query: input }, output: step.output }];
-      log(`Tool "${toolName}" executed successfully`);
-    } else if (node.type === "router") {
-      await sleep(50);
-      const prevOutput = outputs[edges.find((e) => e.target === node.id)?.source ?? "__input"];
-      const prevStr = JSON.stringify(prevOutput ?? "");
-      const route = prevStr.includes("urgent") || prevStr.includes("critical") ? "branch_a" : "branch_b";
-      step.output = { route, decision: route === "branch_a" ? "Escalate" : "Standard flow" };
-      step.latencyMs = 50;
-      log(`Router decision: ${route}`);
-    } else if (node.type === "human") {
-      await sleep(500);
-      step.output = { approved: true, reviewer: "Demo User", comment: "Looks good to proceed" };
-      step.latencyMs = 500;
-      log(`Human-in-loop gate: approved`);
-    } else if (node.type === "memory") {
-      await sleep(80);
-      step.output = { retrieved: "Relevant context from memory store", vectorMatches: 3, latencyMs: 80 };
-      step.latencyMs = 80;
-      log(`Memory retrieved: 3 relevant matches`);
-    } else if (node.type === "output") {
-      await sleep(50);
-      const prevSource = edges.find((e) => e.target === node.id)?.source ?? "__input";
-      step.output = outputs[prevSource] ?? "Workflow complete";
-      step.latencyMs = 50;
-      log(`Output produced`);
+      if (node.type === "input") {
+        await sleep(100);
+        step.output = input;
+        step.latencyMs = 100;
+        log(`Input received: "${input.substring(0, 50)}${input.length > 50 ? "..." : ""}"`);
+      } else if (node.type === "llm") {
+        const mock = getMockLLMResponse(node.label);
+        const speedMultiplier = orchestrationModel === "out-of-llm" ? 0.6 : 1.0;
+        await sleep(mock.latencyMs * speedMultiplier);
+        step.tokensIn = mock.tokensIn;
+        step.tokensOut = mock.tokensOut;
+        step.costUsd = (mock.tokensIn * 0.000003) + (mock.tokensOut * 0.000015);
+        step.latencyMs = Math.round(mock.latencyMs * speedMultiplier);
+        step.output = mock.output;
+        const inboundSources = edges.filter((e) => e.target === node.id).map((e) => e.source);
+        const resolvedSource = inboundSources.find((s) => outputs[s] !== undefined) ?? inboundSources[0] ?? "__input";
+        step.input = outputs[resolvedSource] ?? input;
+        run.totalTokens += (mock.tokensIn + mock.tokensOut);
+        run.totalCost += step.costUsd;
+        log(`LLM call complete: ${mock.tokensIn + mock.tokensOut} tokens, $${step.costUsd.toFixed(4)}`);
+      } else if (node.type === "tool") {
+        const toolName = (node.config?.tool as string) ?? "web_search";
+        const toolLatency = 400 + Math.round(Math.random() * 300);
+        await sleep(toolLatency);
+        step.latencyMs = toolLatency;
+        step.output = getMockToolResponse(toolName);
+        step.toolCalls = [{ name: toolName, input: { query: input }, output: step.output }];
+        log(`Tool "${toolName}" executed successfully`);
+      } else if (node.type === "router") {
+        await sleep(50);
+        const routerSources = edges.filter((e) => e.target === node.id).map((e) => e.source);
+        const routerSource = routerSources.find((s) => outputs[s] !== undefined) ?? routerSources[0] ?? "__input";
+        const prevOutput = outputs[routerSource];
+        const prevStr = JSON.stringify(prevOutput ?? "");
+        const route = prevStr.includes("urgent") || prevStr.includes("critical") ? "branch_a" : "branch_b";
+        step.output = { route, decision: route === "branch_a" ? "Escalate" : "Standard flow" };
+        step.latencyMs = 50;
+        log(`Router decision: ${route}`);
+      } else if (node.type === "human") {
+        await sleep(500);
+        step.output = { approved: true, reviewer: "Demo User", comment: "Looks good to proceed" };
+        step.latencyMs = 500;
+        log(`Human-in-loop gate: approved`);
+      } else if (node.type === "memory") {
+        await sleep(80);
+        step.output = { retrieved: "Relevant context from memory store", vectorMatches: 3, latencyMs: 80 };
+        step.latencyMs = 80;
+        log(`Memory retrieved: 3 relevant matches`);
+      } else if (node.type === "output") {
+        await sleep(50);
+        const outputSources = edges.filter((e) => e.target === node.id).map((e) => e.source);
+        const outputSource = outputSources.find((s) => outputs[s] !== undefined) ?? outputSources[0] ?? "__input";
+        step.output = outputs[outputSource] ?? "Workflow complete";
+        step.latencyMs = 50;
+        log(`Output produced`);
+      }
+
+      step.status = "complete";
+      step.completedAt = Date.now();
+      run.steps.push({ ...step });
+      run.totalLatencyMs += step.latencyMs ?? 0;
+      outputs[node.id] = step.output;
+      onStepUpdate({ ...step });
+
+      adjacency[node.id].forEach((nextId) => {
+        inDegree[nextId]--;
+        if (inDegree[nextId] === 0) queue.push(nextId);
+      });
     }
 
-    step.status = "complete";
-    step.completedAt = Date.now();
-    run.steps.push({ ...step });
-    run.totalLatencyMs += step.latencyMs ?? 0;
-    outputs[node.id] = step.output;
-    onStepUpdate({ ...step });
-
-    // Enqueue downstream nodes
-    adjacency[node.id].forEach((nextId) => {
-      inDegree[nextId]--;
-      if (inDegree[nextId] === 0) queue.push(nextId);
-    });
+    run.status = "complete";
+    log(`Workflow complete. Total: ${run.totalTokens} tokens, $${run.totalCost.toFixed(4)}, ${run.totalLatencyMs}ms`);
+  } catch (err) {
+    run.status = "error";
+    const msg = err instanceof Error ? err.message : String(err);
+    log(`Workflow error: ${msg}`);
   }
 
-  run.status = "complete";
-  log(`Workflow complete. Total: ${run.totalTokens} tokens, $${run.totalCost.toFixed(4)}, ${run.totalLatencyMs}ms`);
   return run;
 }
